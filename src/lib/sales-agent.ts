@@ -34,16 +34,27 @@ function testModeReply(history: {role:"user"|"assistant",content:string}[], acti
 }
 
 export async function generateSalesReply(history: {role:"user"|"assistant",content:string}[], activeProduct?: string|null) {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+  const openAIKey = process.env.OPENAI_API_KEY;
 
-  // Zero-cost test mode: the complete WhatsApp conversation loop can be tested
-  // without an OpenAI API key. Set SALES_AI_MODE=live later to use OpenAI.
-  if (!apiKey || process.env.SALES_AI_MODE !== "live") {
+  // Test mode remains available without any paid AI provider.
+  if (process.env.SALES_AI_MODE !== "live") {
     return testModeReply(history, activeProduct);
   }
 
-  const client = new OpenAI({apiKey});
-  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  // OpenRouter is OpenAI-SDK compatible. Prefer it when configured, while
+  // retaining direct OpenAI support as a fallback for later production use.
+  const useOpenRouter = Boolean(openRouterKey);
+  const apiKey = openRouterKey || openAIKey;
+  if (!apiKey) throw new Error("No AI API key configured");
+
+  const client = new OpenAI({
+    apiKey,
+    ...(useOpenRouter ? { baseURL: "https://openrouter.ai/api/v1" } : {})
+  });
+  const model = useOpenRouter
+    ? (process.env.OPENROUTER_MODEL || "openrouter/free")
+    : (process.env.OPENAI_MODEL || "gpt-5-mini");
   const context = activeProduct ? `Active product: ${activeProduct}` : "No active product yet.";
   const completion = await client.chat.completions.create({
     model,
