@@ -17,9 +17,31 @@ ACTIVE PRODUCTS:
 ${JSON.stringify(PRODUCTS)}
 `;
 
+function testModeReply(history: {role:"user"|"assistant",content:string}[], activeProduct?: string|null) {
+  const latest = [...history].reverse().find(m => m.role === "user")?.content?.trim() ?? "";
+  const text = latest.toLowerCase();
+
+  if (activeProduct === "bookscanpro" || text.includes("bookscanpro") || text.includes("scanner") || text.includes("ocr")) {
+    return "BookScanPro is 2,000 FCFA. It lets you scan documents, use OCR, create PDF/Word files, and use AI assistance and translation.\n\nPurchase: https://digitexcel5g.mychariow.shop/prd_29c6ihy5";
+  }
+  if (activeProduct === "umm" || text.includes("umm") || text.includes("ultimate money") || text.includes("affiliate")) {
+    return "DigitStem UMM is a one-year training focused on AI, affiliate marketing and WhatsApp/Facebook marketing strategies. The confirmed price is 7,250 FCFA / 14,500 NGN.\n\nPurchase: https://digitstem.com/yjF";
+  }
+  if (activeProduct === "tiktok_affiliate_pro" || text.includes("tiktok")) {
+    return "TikTok Affiliate Pro is a practical TikTok Affiliate Marketing course.\n\nPurchase: https://digitexcel5g.mychariow.shop/prd_zr2x3nim";
+  }
+  return "Hello 👋 Welcome. I can help you with the product you came from. Which product are you interested in: BookScanPro, DigitStem UMM, or TikTok Affiliate Pro?";
+}
+
 export async function generateSalesReply(history: {role:"user"|"assistant",content:string}[], activeProduct?: string|null) {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY is missing");
+
+  // Zero-cost test mode: the complete WhatsApp conversation loop can be tested
+  // without an OpenAI API key. Set SALES_AI_MODE=live later to use OpenAI.
+  if (!apiKey || process.env.SALES_AI_MODE !== "live") {
+    return testModeReply(history, activeProduct);
+  }
+
   const client = new OpenAI({apiKey});
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
   const context = activeProduct ? `Active product: ${activeProduct}` : "No active product yet.";
