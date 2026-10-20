@@ -6,6 +6,29 @@ import { sendWhatsAppText } from "@/src/lib/whatsapp";
 
 export const runtime = "nodejs";
 
+function classifySalesStage(customerText: string, assistantText: string): { stage: string; objectionType: string | null } {
+  const text = customerText.toLowerCase();
+  const hasRegistrationIntent = /inscri|register|enroll|enrol|paiement|payment|pay now|je veux payer|je veux m'inscrire|lien|link/.test(text);
+  const objectionPatterns: Array<[RegExp, string]> = [
+    [/trop cher|cher|prix|co[uû]t|budget|expensive|can't afford|cannot afford|price|fee/, "price"],
+    [/pas le temps|manque de temps|busy|no time|schedule|horaire/, "time"],
+    [/peur|difficile|compliqu|beginner|débutant|not technical|not sure i can|pas capable/, "confidence"],
+    [/fiable|arnaque|scam|legitimate|trust|accr[eé]dit|is it real/, "trust"],
+    [/r[eé]fl[eé]chir|think about|not sure|je ne sais pas|maybe later|plus tard|consult/, "hesitation"],
+  ];
+  const objection = objectionPatterns.find(([pattern]) => pattern.test(text));
+  if (hasRegistrationIntent) return { stage: "READY_TO_REGISTER", objectionType: null };
+  if (objection) return { stage: "OBJECTION", objectionType: objection[1] };
+  if (/https:\/\/kingdom-ai-academy\.vercel\.app\/auth\/register/.test(assistantText)) {
+    return { stage: "LINK_SENT", objectionType: null };
+  }
+  if (/bonjour|hello|hi\b|bonsoir|good morning|good evening/.test(text)) {
+    return { stage: "DISCOVERY", objectionType: null };
+  }
+  return { stage: "ENGAGED", objectionType: null };
+}
+
+
 export async function GET(req: NextRequest) {
   const mode = req.nextUrl.searchParams.get("hub.mode");
   const token = req.nextUrl.searchParams.get("hub.verify_token");
