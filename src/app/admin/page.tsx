@@ -98,6 +98,7 @@ export default function AdminDashboardPage() {
             <p style={{ color: "#4f5fb5", fontSize: 12, fontWeight: 800, letterSpacing: ".12em", margin: "0 0 8px" }}>KINGDOM AI ACADEMY</p>
             <h1 style={{ fontSize: "clamp(28px, 4vw, 38px)", margin: 0, letterSpacing: "-.04em" }}>WhatsApp Sales OS</h1>
             <p style={{ margin: "8px 0 0", color: "#667085" }}>Admin overview · customer CRM · message operations</p>
+            <a href="/admin/customers" style={{ display: "inline-block", marginTop: 12, color: "#3545a5", fontWeight: 700, textDecoration: "none" }}>Open customer CRM →</a>
           </div>
           {data && <button onClick={logout} style={{ border: "1px solid #d9dfeb", borderRadius: 10, background: "#fff", padding: "10px 14px", cursor: "pointer", fontWeight: 700 }}>Lock dashboard</button>}
         </header>
