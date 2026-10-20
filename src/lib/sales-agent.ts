@@ -1,4 +1,3 @@
-import { PRODUCTS } from "./products";
 import { generateWithFreeRouter } from "./free-router";
 
 type HistoryMessage = { role: "user" | "assistant"; content: string };
@@ -16,8 +15,7 @@ Rules:
 - Never invent product information, prices, discounts or results.
 - If ready to buy, provide the direct product link.
 - If clearly not interested, respect that.
-ACTIVE PRODUCTS:
-${JSON.stringify(PRODUCTS)}
+ACADEMY COURSE ONLY: practical bilingual training in AI fundamentals and digital tools.
 `;
 
 function testModeReply(history: HistoryMessage[], activeProduct?: string | null) {
@@ -44,13 +42,6 @@ function testModeReply(history: HistoryMessage[], activeProduct?: string | null)
     ? "Bonjour 👋 Bienvenue à Kingdom AI Academy ! Nous proposons une formation pratique bilingue sur les bases de l'IA et les outils numériques. Souhaitez-vous connaître le contenu, le tarif ou les étapes d'inscription ? https://kingdom-ai-academy.vercel.app/"
     : "Hello 👋 Welcome to Kingdom AI Academy! We offer practical bilingual training in AI fundamentals and digital tools. Would you like to know about the course, fee, or registration? https://kingdom-ai-academy.vercel.app/";
 
-  if (activeProduct === "bookscanpro" || text.includes("bookscanpro") || text.includes("scanner") || text.includes("ocr"))
-    return "BookScanPro is 2,000 FCFA. It lets you scan documents, use OCR, create PDF/Word files, and use AI assistance and translation.\n\nPurchase: https://digitexcel5g.mychariow.shop/prd_29c6ihy5";
-  if (activeProduct === "umm" || text.includes("umm") || text.includes("ultimate money") || text.includes("affiliate"))
-    return "DigitStem UMM is a one-year training focused on AI, affiliate marketing and WhatsApp/Facebook marketing strategies. The confirmed price is 7,250 FCFA / 14,500 NGN.\n\nPurchase: https://digitstem.com/yjF";
-  if (activeProduct === "tiktok_affiliate_pro" || text.includes("tiktok"))
-    return "TikTok Affiliate Pro is a practical TikTok Affiliate Marketing course.\n\nPurchase: https://digitexcel5g.mychariow.shop/prd_zr2x3nim";
-  return "Hello 👋 Welcome. I can help you with the product you came from. Which product are you interested in: BookScanPro, DigitStem UMM, or TikTok Affiliate Pro?";
 }
 
 export async function generateSalesReply(history: HistoryMessage[], activeProduct?: string | null) {
@@ -58,7 +49,7 @@ export async function generateSalesReply(history: HistoryMessage[], activeProduc
     return testModeReply(history, activeProduct);
   }
 
-  const context = activeProduct ? `Active product: ${activeProduct}` : "No active product yet.";
+  const context = "Active product: Kingdom AI Academy practical bilingual AI course. Ignore any legacy product identifiers.";
   const result = await generateWithFreeRouter(SYSTEM + "\n" + context, history);
   return result.text;
 }
