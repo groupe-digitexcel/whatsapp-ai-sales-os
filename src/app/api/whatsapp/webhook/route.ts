@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   try {
     const {data: customer} = await supabase.from("customers")
       .upsert({whatsapp_number: incoming.from}, {onConflict:"whatsapp_number"})
-      .select("id").single();
+      .select("id,marketing_opt_out").single();
     if (!customer) throw new Error("Customer creation failed");
 
     let {data: conversation} = await supabase.from("conversations")
@@ -57,6 +57,18 @@ export async function POST(req: NextRequest) {
       conversation_id: conversation.id, direction:"inbound", body:incoming.text,
       provider_message_id:incoming.messageId, created_at:incoming.timestamp
     });
+
+    // Honor STOP requests and suppress all proactive follow-ups for opted-out contacts.
+    const stopRequested = /^(stop|unsubscribe|cancel|arr[eê]te|arrêter|stop messages|ne plus m'envoyer de messages)$/i.test(incoming.text.trim());
+    if (stopRequested || customer.marketing_opt_out) {
+      if (stopRequested) {
+        await supabase.from("customers").update({marketing_opt_out:true, marketing_consent_at:null, marketing_consent_source:null, updated_at:new Date().toISOString()}).eq("id", customer.id);
+      }
+      await supabase.from("follow_ups").update({status:"cancelled"}).eq("conversation_id", conversation.id).eq("status","pending");
+      await supabase.from("outbox_messages").update({status:"cancelled", last_error:"Contact opted out of proactive messaging"}).eq("conversation_id", conversation.id).eq("status","pending");
+      await supabase.from("webhook_events").update({status:"processed",processed_at:new Date().toISOString()}).eq("event_id",incoming.messageId);
+      return NextResponse.json({ok:true, opted_out:true});
+    }
 
     const {data: history} = await supabase.from("messages")
       .select("direction,body").eq("conversation_id",conversation.id)
