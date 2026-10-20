@@ -22,6 +22,26 @@ ${JSON.stringify(PRODUCTS)}
 function testModeReply(history: HistoryMessage[], activeProduct?: string | null) {
   const latest = [...history].reverse().find(m => m.role === "user")?.content?.trim() ?? "";
   const text = latest.toLowerCase();
+  // Academy-only mode: never route prospects to unrelated products.
+  const french = /bonjour|prix|combien|co[uû]t|inscri|formation|cours|paiement|promotion|fran[cç]ais/.test(text);
+  if (/promotion|promo|discount|r[eé]duction/.test(text)) {
+    return french
+      ? "Le tarif standard confirmé est de 60 000 FCFA. Toute promotion doit être confirmée par l'équipe. Consultez https://kingdom-ai-academy.vercel.app/"
+      : "The confirmed standard fee is 60,000 FCFA. Please confirm any promotion with the Academy team: https://kingdom-ai-academy.vercel.app/";
+  }
+  if (/prix|combien|co[uû]t|price|how much|fee|tuition/.test(text)) {
+    return french
+      ? "Le tarif standard confirmé de la formation est de 60 000 FCFA. Informations d'inscription : https://kingdom-ai-academy.vercel.app/"
+      : "The confirmed standard course fee is 60,000 FCFA. Registration information: https://kingdom-ai-academy.vercel.app/";
+  }
+  if (/inscri|register|enroll|enrol|paiement|payment|pay/.test(text)) {
+    return french
+      ? "Pour les étapes officielles d'inscription et de paiement, consultez https://kingdom-ai-academy.vercel.app/. Ne partagez jamais de mot de passe ni de code OTP."
+      : "For official registration and payment steps, visit https://kingdom-ai-academy.vercel.app/. Never share a password or OTP.";
+  }
+  return french
+    ? "Bonjour 👋 Bienvenue à Kingdom AI Academy ! Nous proposons une formation pratique bilingue sur les bases de l'IA et les outils numériques. Souhaitez-vous connaître le contenu, le tarif ou les étapes d'inscription ? https://kingdom-ai-academy.vercel.app/"
+    : "Hello 👋 Welcome to Kingdom AI Academy! We offer practical bilingual training in AI fundamentals and digital tools. Would you like to know about the course, fee, or registration? https://kingdom-ai-academy.vercel.app/";
 
   if (activeProduct === "bookscanpro" || text.includes("bookscanpro") || text.includes("scanner") || text.includes("ocr"))
     return "BookScanPro is 2,000 FCFA. It lets you scan documents, use OCR, create PDF/Word files, and use AI assistance and translation.\n\nPurchase: https://digitexcel5g.mychariow.shop/prd_29c6ihy5";
