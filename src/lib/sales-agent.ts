@@ -2,6 +2,17 @@ import { generateWithFreeRouter } from "./free-router";
 
 type HistoryMessage = { role: "user" | "assistant"; content: string };
 
+export type AcademySalesInfo = {
+  ok?: boolean; available?: boolean;
+  course?: { titleEn?: string; titleFr?: string; descriptionEn?: string | null; descriptionFr?: string | null; durationWeeks?: number };
+  cohorts?: Array<{ id: string; name: string; status: string; startDate: string; endDate: string; capacity: number; enrolledCount: number; remainingPlaces: number; isFull: boolean; currency: string; listPriceXaf: number; priceXaf: number; isFree: boolean; promotionActive: boolean; promotionEndsAt: string | null }>;
+  registrationUrl?: string; siteUrl?: string;
+};
+const SITE_URL = "https://kingdom-ai-academy.vercel.app";
+const formatXaf = (value: number) => new Intl.NumberFormat("fr-FR").format(value) + " FCFA";
+const currentCohort = (info?: AcademySalesInfo) => (info?.cohorts ?? []).find((cohort) => !cohort.isFull) ?? (info?.cohorts ?? [])[0];
+const registrationLink = (info?: AcademySalesInfo) => info?.registrationUrl || SITE_URL + "/auth/register";
+
 const SYSTEM = `You are the official WhatsApp AI admissions and student-support assistant for Kingdom AI Academy. This is the authoritative funnel and FAQ playbook. Operate only for Kingdom AI Academy; never mention or route to unrelated products.
 
 LANGUAGE AND STYLE
@@ -67,38 +78,51 @@ FOLLOW-UP, CONSENT AND PRIVACY
 FINAL RULE
 Be useful, honest and non-coercive. The desired outcome is that each prospect feels understood, gets accurate answers, and can make an informed decision. `;
 
-function testModeReply(history: HistoryMessage[]) {
+function testModeReply(history: HistoryMessage[], academyInfo?: AcademySalesInfo) {
   const latest = [...history].reverse().find(m => m.role === "user")?.content?.trim() ?? "";
   const text = latest.toLowerCase();
   // Academy-only mode: never route prospects to unrelated products.
   const french = /bonjour|prix|combien|co[uû]t|inscri|formation|cours|paiement|promotion|fran[cç]ais/.test(text);
+  const cohort = currentCohort(academyInfo);
+  const infoIsLive = academyInfo?.ok === true && academyInfo.available === true;
+  const link = registrationLink(academyInfo);
+  const priceLine = infoIsLive && cohort
+    ? cohort.isFree
+      ? (french ? "La cohorte disponible est actuellement gratuite." : "The available cohort is currently free.")
+      : cohort.promotionActive
+        ? (french ? `Tarif actuel : ${formatXaf(cohort.priceXaf)} au lieu de ${formatXaf(cohort.listPriceXaf)} selon l’offre affichée pour ${cohort.name}.` : `Current fee: ${formatXaf(cohort.priceXaf)} instead of ${formatXaf(cohort.listPriceXaf)} under the offer shown for ${cohort.name}.`)
+        : (french ? `Tarif actuel : ${formatXaf(cohort.priceXaf)} pour ${cohort.name}.` : `Current fee: ${formatXaf(cohort.priceXaf)} for ${cohort.name}.`)
+    : "";
   if (/promotion|promo|discount|r[eé]duction/.test(text)) {
-    return french
-      ? "Les promotions éventuelles doivent être confirmées par l’Academy. Consultez le tarif et les conditions actuellement publiés : https://kingdom-ai-academy.vercel.app/"
-      : "Any promotion must be confirmed by the Academy. Check the current published fee and terms: https://kingdom-ai-academy.vercel.app/";
+    return infoIsLive && cohort
+      ? (french ? `${priceLine} Consultez les conditions et inscrivez-vous ici : ${link}` : `${priceLine} Check the terms and register here: ${link}`)
+      : (french ? `Je ne peux pas confirmer le tarif actuel pour le moment. Consultez le site officiel : ${SITE_URL}` : `I cannot verify the current fee right now. Please check the official site: ${SITE_URL}`);
   }
   if (/prix|combien|co[uû]t|price|how much|fee|tuition/.test(text)) {
-    return french
-      ? "Le tarif applicable est celui actuellement affiché dans le processus officiel d’inscription. Consultez https://kingdom-ai-academy.vercel.app/ pour les informations à jour."
-      : "The applicable fee is the one currently displayed in the official registration flow. Check https://kingdom-ai-academy.vercel.app/ for current information.";
+    return infoIsLive && cohort
+      ? (french ? `${priceLine} Les détails et l’inscription sont ici : ${link}` : `${priceLine} Course details and registration are here: ${link}`)
+      : (french ? `Le tarif actuel doit être vérifié sur le site officiel : ${SITE_URL}` : `Please check the official site for the current fee: ${SITE_URL}`);
   }
   if (/inscri|register|enroll|enrol|paiement|payment|pay/.test(text)) {
     return french
-      ? "Pour les étapes officielles d'inscription et de paiement, consultez https://kingdom-ai-academy.vercel.app/. Ne partagez jamais de mot de passe ni de code OTP."
-      : "For official registration and payment steps, visit https://kingdom-ai-academy.vercel.app/. Never share a password or OTP.";
+      ? `Pour voir la cohorte disponible et suivre les étapes officielles d'inscription et de paiement : ${link} Ne partagez jamais de mot de passe ni de code OTP.`
+      : `View the available cohort and follow the official registration and payment steps here: ${link} Never share a password or OTP.`;
   }
   return french
-    ? "Bonjour 👋 Bienvenue à Kingdom AI Academy ! Nous proposons une formation pratique bilingue sur les bases de l'IA et les outils numériques. Souhaitez-vous connaître le contenu, le tarif ou les étapes d'inscription ? https://kingdom-ai-academy.vercel.app/"
-    : "Hello 👋 Welcome to Kingdom AI Academy! We offer practical bilingual training in AI fundamentals and digital tools. Would you like to know about the course, fee, or registration? https://kingdom-ai-academy.vercel.app/";
+    ? `Bonjour 👋 Bienvenue à Kingdom AI Academy ! Nous proposons une formation pratique sur les bases de l'IA et les outils numériques. ${infoIsLive && cohort ? `La cohorte affichée actuellement est ${cohort.name}. ` : ""}Souhaitez-vous connaître le contenu, le tarif ou les étapes d'inscription ? ${link}`
+    : `Hello 👋 Welcome to Kingdom AI Academy! We offer practical training in AI fundamentals and digital tools. ${infoIsLive && cohort ? `The currently listed cohort is ${cohort.name}. ` : ""}Would you like to know about the course, fee, or registration? ${link}`;
 
 }
 
-export async function generateSalesReply(history: HistoryMessage[], activeProduct?: string | null) {
+export async function generateSalesReply(history: HistoryMessage[], activeProduct?: string | null, academyInfo?: AcademySalesInfo) {
   if (process.env.SALES_AI_MODE !== "live") {
-    return testModeReply(history);
+    return testModeReply(history, academyInfo);
   }
 
-  const context = "Active product: Kingdom AI Academy practical bilingual AI course. Ignore any legacy product identifiers.";
+  const safeInfo = academyInfo?.ok && academyInfo.available
+    ? JSON.stringify({ course: academyInfo.course, cohorts: academyInfo.cohorts, registrationUrl: registrationLink(academyInfo) })
+    : "Live Academy information is temporarily unavailable. Do not guess prices, promotions, cohort status, or seat counts.";
+  const context = "Active product: Kingdom AI Academy practical bilingual AI course. Ignore any legacy product identifiers.\nCURRENT VERIFIED ACADEMY DATA (use this instead of guesses): " + safeInfo;
   const result = await generateWithFreeRouter(SYSTEM + "\n" + context, history);
   return result.text;
 }
