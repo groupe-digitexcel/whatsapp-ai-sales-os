@@ -69,11 +69,17 @@ function testModeReply(history: HistoryMessage[]) {
 }
 
 export async function generateSalesReply(history: HistoryMessage[], activeProduct?: string | null) {
-  if (process.env.SALES_AI_MODE !== "live") {
+  // Deterministic replies are reserved for explicit test mode. Normal operation uses the adaptive AI sales funnel.
+  if (process.env.SALES_AI_MODE === "test") {
     return testModeReply(history);
   }
 
   const context = "Active product: Kingdom AI Academy practical AI training. Official registration and checkout destination: " + REGISTRATION_URL + ". This assistant operates independently as a sales funnel. Do not depend on a live API connection to the Academy platform. Do not guess current prices or promotions; direct the prospect to the official registration page for those details.";
-  const result = await generateWithFreeRouter(SYSTEM + "\n" + context, history);
-  return result.text;
+  try {
+    const result = await generateWithFreeRouter(SYSTEM + "\n" + context, history);
+    return result.text;
+  } catch (error) {
+    console.error("[sales-agent] AI generation failed; using safe fallback reply", error);
+    return testModeReply(history);
+  }
 }
