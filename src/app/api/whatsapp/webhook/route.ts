@@ -58,14 +58,20 @@ export async function POST(req: NextRequest) {
       provider_message_id:incoming.messageId, created_at:incoming.timestamp
     });
 
-    // Honor STOP requests and suppress all proactive follow-ups for opted-out contacts.
+    // Honor explicit STOP requests. Opt-out suppresses proactive messages, not customer-initiated support.
     const stopRequested = /^(stop|unsubscribe|cancel|arr[eê]te|arrêter|stop messages|ne plus m'envoyer de messages)$/i.test(incoming.text.trim());
-    if (stopRequested || customer.marketing_opt_out) {
-      if (stopRequested) {
-        await supabase.from("customers").update({marketing_opt_out:true, marketing_consent_at:null, marketing_consent_source:null, updated_at:new Date().toISOString()}).eq("id", customer.id);
-      }
+    if (stopRequested) {
+      await supabase.from("customers").update({marketing_opt_out:true, marketing_consent_at:null, marketing_consent_source:null, updated_at:new Date().toISOString()}).eq("id", customer.id);
       await supabase.from("follow_ups").update({status:"cancelled"}).eq("conversation_id", conversation.id).eq("status","pending");
       await supabase.from("outbox_messages").update({status:"cancelled", last_error:"Contact opted out of proactive messaging"}).eq("conversation_id", conversation.id).eq("status","pending");
+      const confirmation = /bonjour|arr[eê]te|désabonn|fran[cç]ais|ne plus m'envoyer/i.test(incoming.text)
+        ? "Vous êtes désabonné(e) des messages promotionnels. Aucun autre message promotionnel ne vous sera envoyé. Si vous nous écrivez à nouveau, nous pourrons répondre à votre demande."
+        : "You are unsubscribed from promotional messages. No further promotional messages will be sent. If you message us again, we may still reply to your request.";
+      const wa = await sendWhatsAppText(incoming.from, confirmation);
+      await supabase.from("messages").insert({
+        conversation_id: conversation.id, direction:"outbound", body:confirmation,
+        provider_message_id:wa?.messages?.[0]?.id ?? null
+      });
       await supabase.from("webhook_events").update({status:"processed",processed_at:new Date().toISOString()}).eq("event_id",incoming.messageId);
       return NextResponse.json({ok:true, opted_out:true});
     }
