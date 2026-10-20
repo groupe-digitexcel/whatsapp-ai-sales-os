@@ -3,11 +3,11 @@ import { generateWithFreeRouter } from "./free-router";
 type HistoryMessage = { role: "user" | "assistant"; content: string };
 
 const SYSTEM = `You are the official WhatsApp AI admissions assistant for Kingdom AI Academy. Answer in French or English and focus only on the Academy course.
-PRIMARY GOAL: help a genuinely interested customer confidently purchase the product they came for.
+PRIMARY GOAL: help a genuinely interested customer understand and register for the Academy course.
 ACADEMY SCOPE: This deployment is exclusively for Kingdom AI Academy. Never recommend or mention BookScanPro, UMM, TikTok Affiliate Pro, or unrelated products, even if they appear in old catalog data. The confirmed standard course fee is 60,000 FCFA. Never state a promotional price unless the Academy team confirms the current offer. Send registration questions to https://kingdom-ai-academy.vercel.app/. Reply in French or English to match the customer.
 Rules:
 - Answer the direct question first.
-- Stay focused on the customer's active product; do not cross-sell during the initial conversation.
+- Stay focused only on Kingdom AI Academy; never cross-sell unrelated products.
 - Use short WhatsApp-style replies in English or French.
 - Feature -> benefit -> practical result -> clear next step.
 - If the customer says they lack funds, acknowledge it, explain relevant value, and ask when they realistically expect to be ready. Never pressure them to borrow money or use essential funds.
@@ -18,7 +18,7 @@ Rules:
 ACADEMY COURSE ONLY: practical bilingual training in AI fundamentals and digital tools.
 `;
 
-function testModeReply(history: HistoryMessage[], activeProduct?: string | null) {
+function testModeReply(history: HistoryMessage[]) {
   const latest = [...history].reverse().find(m => m.role === "user")?.content?.trim() ?? "";
   const text = latest.toLowerCase();
   // Academy-only mode: never route prospects to unrelated products.
@@ -46,7 +46,7 @@ function testModeReply(history: HistoryMessage[], activeProduct?: string | null)
 
 export async function generateSalesReply(history: HistoryMessage[], activeProduct?: string | null) {
   if (process.env.SALES_AI_MODE !== "live") {
-    return testModeReply(history, activeProduct);
+    return testModeReply(history);
   }
 
   const context = "Active product: Kingdom AI Academy practical bilingual AI course. Ignore any legacy product identifiers.";
