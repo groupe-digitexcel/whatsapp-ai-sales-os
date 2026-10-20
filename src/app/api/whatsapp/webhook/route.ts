@@ -32,10 +32,17 @@ export async function POST(req: NextRequest) {
 
   const supabase = db();
 
-  // Idempotency: the same Meta event must never create two replies.
-  const {data: existing} = await supabase.from("webhook_events").select("id").eq("event_id", incoming.messageId).maybeSingle();
+  // Idempotency: do not reply twice to the same Meta message, including concurrent deliveries.
+  const {data: existing, error: lookupError} = await supabase.from("webhook_events")
+    .select("id").eq("event_id", incoming.messageId).maybeSingle();
+  if (lookupError) return NextResponse.json({ok:false, error:"Event lookup failed"}, {status:503});
   if (existing) return NextResponse.json({ok:true, duplicate:true});
-  await supabase.from("webhook_events").insert({event_id: incoming.messageId, payload, status:"processing"});
+  const {error: insertEventError} = await supabase.from("webhook_events")
+    .insert({event_id: incoming.messageId, payload, status:"processing"});
+  if (insertEventError) {
+    if (insertEventError.code === "23505") return NextResponse.json({ok:true, duplicate:true});
+    return NextResponse.json({ok:false, error:"Event registration failed"}, {status:503});
+  }
 
   try {
     const {data: customer} = await supabase.from("customers")
@@ -59,14 +66,20 @@ export async function POST(req: NextRequest) {
     });
 
     // Honor explicit STOP requests. Opt-out suppresses proactive messages, not customer-initiated support.
-    const stopRequested = /^(stop|unsubscribe|cancel|arr[eê]te|arrêter|stop messages|ne plus m'envoyer de messages)$/i.test(incoming.text.trim());
+    const stopRequested = /^(stop|stop all|unsubscribe|unsub|cancel|no more messages|do not message|don't message|arr[eê]te(?:z)?|arr[eê]ter|désabonn(?:e|ez|er|ement)?|ne plus m'envoyer de messages|ne m'envoyez plus de messages)$/i.test(incoming.text.trim());
     if (stopRequested) {
-      await supabase.from("customers").update({marketing_opt_out:true, marketing_consent_at:null, marketing_consent_source:null, updated_at:new Date().toISOString()}).eq("id", customer.id);
-      await supabase.from("follow_ups").update({status:"cancelled"}).eq("conversation_id", conversation.id).eq("status","pending");
-      await supabase.from("outbox_messages").update({status:"cancelled", last_error:"Contact opted out of proactive messaging"}).eq("conversation_id", conversation.id).eq("status","pending");
-      const confirmation = /bonjour|arr[eê]te|désabonn|fran[cç]ais|ne plus m'envoyer/i.test(incoming.text)
-        ? "Vous êtes désabonné(e) des messages promotionnels. Aucun autre message promotionnel ne vous sera envoyé. Si vous nous écrivez à nouveau, nous pourrons répondre à votre demande."
-        : "You are unsubscribed from promotional messages. No further promotional messages will be sent. If you message us again, we may still reply to your request.";
+      const {error: optOutError} = await supabase.from("customers")
+        .update({marketing_opt_out:true, marketing_consent_at:null, marketing_consent_source:null, updated_at:new Date().toISOString()})
+        .eq("id", customer.id);
+      if (optOutError) throw new Error("Could not save marketing opt-out");
+      const {error: followUpCancelError} = await supabase.from("follow_ups")
+        .update({status:"cancelled"}).eq("conversation_id", conversation.id).eq("status","pending");
+      if (followUpCancelError) throw new Error("Could not cancel pending follow-ups");
+      const {error: outboxCancelError} = await supabase.from("outbox_messages")
+        .update({status:"cancelled", last_error:"Contact opted out of proactive messaging"})
+        .eq("conversation_id", conversation.id).eq("status","pending");
+      if (outboxCancelError) throw new Error("Could not cancel queued messages");
+      const confirmation = "You are unsubscribed from promotional messages. No further promotional messages will be sent. If you message us again, we may still reply to your request.\n\nVous êtes désabonné(e) des messages promotionnels. Aucun autre message promotionnel ne sera envoyé. Si vous nous écrivez à nouveau, nous pourrons répondre à votre demande.";
       const wa = await sendWhatsAppText(incoming.from, confirmation);
       await supabase.from("messages").insert({
         conversation_id: conversation.id, direction:"outbound", body:confirmation,
