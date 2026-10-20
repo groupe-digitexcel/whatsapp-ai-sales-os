@@ -1,13 +1,31 @@
-# Kingdom AI Academy WhatsApp Assistant
+# Kingdom AI Academy WhatsApp AI Sales OS
 
-Next.js + Vercel + Supabase integration for the official Kingdom AI Academy WhatsApp admissions assistant.
+Independent WhatsApp-based sales funnel for Kingdom AI Academy. This project is separate from the Academy student platform.
 
-## Current scope
-- Respond only about Kingdom AI Academy's practical bilingual AI course.
-- Confirmed standard fee: **60,000 FCFA**. Do not quote a promotion unless the Academy team has confirmed the current offer.
-- Registration information: https://kingdom-ai-academy.vercel.app/
-- Replies are intended to follow the customer's language (French or English).
-- Keep Meta and Supabase secrets server-side in Vercel environment variables.
+## Purpose
+The assistant welcomes prospects, discovers their goals, explains relevant course value, handles objections honestly, and guides interested people to the Academy's public registration and payment page.
+
+## Architecture boundary
+- **This repository:** WhatsApp conversation, sales strategy, prospect/conversation records, opt-out handling, and sales-funnel behavior.
+- **Academy website:** public course information, registration, checkout/payment, and enrollment.
+- The WhatsApp assistant does **not** act as a student tutor, student dashboard, enrollment manager, or embedded Academy feature.
+- The WhatsApp webhook does not call the Academy's internal or public sales-info API. It uses the public registration URL as the hand-off destination.
+- Current fee, promotions, available cohorts, payment instructions and other changing details must be checked on the official registration page. The assistant must not guess or fabricate them.
+
+## Public registration destination
+`https://kingdom-ai-academy.vercel.app/auth/register?utm_source=whatsapp&utm_medium=chat&utm_campaign=academy_admissions`
+
+The public Academy website is the source of truth for current offer and checkout details.
+
+## Sales conversation
+1. Welcome in French or English.
+2. Discover the prospect's goal and relevant context, one question at a time.
+3. Match the course's practical value to that goal.
+4. Handle the specific objection with truthful, non-coercive answers.
+5. Invite the prospect to register when they show readiness.
+6. Respect a clear refusal and all opt-out requests.
+
+Do not invent prices, promotions, deadlines, seat counts, accreditation, testimonials, payment success, or enrollment status. Never ask for passwords, mobile-money PINs or OTPs.
 
 ## Webhook
 Configure Meta to call:
@@ -16,19 +34,19 @@ Configure Meta to call:
 Set the same verify token in Meta and Vercel's `WHATSAPP_VERIFY_TOKEN`. The webhook validates `x-hub-signature-256` using `META_APP_SECRET`, records message IDs for idempotency, and stores conversations and messages in Supabase.
 
 ## Opt-out behavior
-- The exact STOP/unsubscribe phrases supported by the webhook mark the contact as opted out.
+- Supported STOP/unsubscribe phrases mark the contact as opted out.
 - The handler attempts to cancel pending `follow_ups` and queued `outbox_messages`, then sends a bilingual confirmation.
-- Opting out should suppress all proactive marketing. Customer-initiated support may still be answered.
-- Any future follow-up scheduler or outbox dispatcher MUST check `customers.marketing_opt_out` immediately before sending and must obey Meta's messaging-window/template requirements.
-- This repository does not yet provide a verified scheduled-message dispatcher. Do not assume that pending queue records will be sent or that all future senders already enforce opt-out.
+- Opting out must suppress proactive marketing. Customer-initiated messages may still receive a response.
+- **Automatic scheduled follow-up is not considered complete** until a real scheduler/dispatcher is implemented, tested, and confirmed to enforce opt-out and Meta's messaging-window/template requirements. Do not claim that queued follow-ups are being sent unless that dispatcher exists and is verified.
 
-## Safe test sequence
-1. Confirm the latest Vercel deployment is READY and identify its assigned URL.
+## Verification checklist
+1. Confirm the latest Vercel deployment is READY.
 2. Confirm Meta webhook verification succeeds without exposing the verify token.
-3. Send a controlled French question about the course; verify one reply and a matching Supabase message record.
-4. Send an English question; verify the response is Academy-only and the standard fee is 60,000 FCFA.
-5. Send `STOP`; verify `customers.marketing_opt_out = true`, pending follow-ups/outbox rows are cancelled, and the bilingual confirmation is recorded.
-6. Send a new customer-initiated question; verify support can still respond.
-7. Check Vercel runtime logs and Supabase `webhook_events` for failed processing.
+3. Send controlled French and English messages and verify replies follow the prospect's language and the sales funnel.
+4. Test course-price and promotion questions: the assistant must direct prospects to the official registration page rather than invent a fee.
+5. Test an objection (for example, cost or lack of experience) and confirm the response addresses that exact concern.
+6. Send `STOP`; verify opt-out is stored, pending follow-ups/outbox rows are cancelled, and a bilingual confirmation is recorded.
+7. Send a new customer-initiated question and verify that the assistant can still respond.
+8. Check Vercel runtime logs and Supabase `webhook_events` for failed processing.
 
-Do not claim the integration is production-ready until these tests pass against the actual Meta-connected number. Keep the existing WhatsApp Business number connected; do not migrate it as part of testing.
+Do not claim production readiness until these tests pass against the actual Meta-connected number. Keep the existing WhatsApp Business number connected; do not migrate it as part of testing.
