@@ -106,8 +106,12 @@ export async function POST(req: NextRequest) {
       conversation_id: conversation.id, direction:"outbound", body:reply,
       provider_message_id:wa?.messages?.[0]?.id ?? null
     });
+    const funnelState = classifySalesStage(incoming.text, reply);
     await supabase.from("conversations").update({
-      stage:"ENGAGED", last_customer_message_at:incoming.timestamp, updated_at:new Date().toISOString()
+      stage: funnelState.stage,
+      objection_type: funnelState.objectionType,
+      last_customer_message_at:incoming.timestamp,
+      updated_at:new Date().toISOString()
     }).eq("id",conversation.id);
     await supabase.from("webhook_events").update({status:"processed",processed_at:new Date().toISOString()}).eq("event_id",incoming.messageId);
 
