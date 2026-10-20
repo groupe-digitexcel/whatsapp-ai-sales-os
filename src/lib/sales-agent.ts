@@ -74,13 +74,13 @@ function testModeReply(history: HistoryMessage[]) {
   const french = /bonjour|prix|combien|co[uû]t|inscri|formation|cours|paiement|promotion|fran[cç]ais/.test(text);
   if (/promotion|promo|discount|r[eé]duction/.test(text)) {
     return french
-      ? "Le tarif standard confirmé est de 60 000 FCFA. Toute promotion doit être confirmée par l'équipe. Consultez https://kingdom-ai-academy.vercel.app/"
-      : "The confirmed standard fee is 60,000 FCFA. Please confirm any promotion with the Academy team: https://kingdom-ai-academy.vercel.app/";
+      ? "Les promotions éventuelles doivent être confirmées par l’Academy. Consultez le tarif et les conditions actuellement publiés : https://kingdom-ai-academy.vercel.app/"
+      : "Any promotion must be confirmed by the Academy. Check the current published fee and terms: https://kingdom-ai-academy.vercel.app/";
   }
   if (/prix|combien|co[uû]t|price|how much|fee|tuition/.test(text)) {
     return french
-      ? "Le tarif standard confirmé de la formation est de 60 000 FCFA. Informations d'inscription : https://kingdom-ai-academy.vercel.app/"
-      : "The confirmed standard course fee is 60,000 FCFA. Registration information: https://kingdom-ai-academy.vercel.app/";
+      ? "Le tarif applicable est celui actuellement affiché dans le processus officiel d’inscription. Consultez https://kingdom-ai-academy.vercel.app/ pour les informations à jour."
+      : "The applicable fee is the one currently displayed in the official registration flow. Check https://kingdom-ai-academy.vercel.app/ for current information.";
   }
   if (/inscri|register|enroll|enrol|paiement|payment|pay/.test(text)) {
     return french
