@@ -17,6 +17,11 @@ The assistant welcomes prospects, discovers their goals, explains relevant cours
 
 The public Academy website is the source of truth for current offer and checkout details.
 
+## AI operation mode
+- Adaptive AI sales replies are the default when an AI provider key is configured.
+- Set `SALES_AI_MODE=test` only when deliberately testing deterministic fallback replies.
+- If AI generation fails, the webhook uses a safe fallback reply; verify provider configuration and logs before treating the funnel as production-ready.
+
 ## Sales conversation
 1. Welcome in French or English.
 2. Discover the prospect's goal and relevant context, one question at a time.
