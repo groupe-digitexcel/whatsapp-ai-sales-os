@@ -98,7 +98,20 @@ export async function POST(req: NextRequest) {
       content: m.body
     }));
 
-    const reply = await generateSalesReply(aiHistory, conversation.active_product);
+    // Pull current course/cohort/price from the Academy's own production API.
+    // If that service is briefly unavailable, the assistant falls back safely and does not invent prices.
+    let academyInfo: any = undefined;
+    try {
+      const academyResponse = await fetch("https://kingdom-ai-academy.vercel.app/api/public/sales-info", {
+        cache: "no-store",
+        signal: AbortSignal.timeout(3500),
+      });
+      if (academyResponse.ok) academyInfo = await academyResponse.json();
+    } catch (academyError) {
+      console.warn("[whatsapp] Live Academy data unavailable; using safe fallback", academyError);
+    }
+
+    const reply = await generateSalesReply(aiHistory, conversation.active_product, academyInfo);
     const wa = await sendWhatsAppText(incoming.from, reply);
 
     await supabase.from("messages").insert({
