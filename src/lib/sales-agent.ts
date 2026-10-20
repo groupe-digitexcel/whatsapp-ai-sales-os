@@ -74,6 +74,6 @@ export async function generateSalesReply(history: HistoryMessage[], activeProduc
   }
 
   const context = "Active product: Kingdom AI Academy practical AI training. Official registration and checkout destination: " + REGISTRATION_URL + ". This assistant operates independently as a sales funnel. Do not depend on a live API connection to the Academy platform. Do not guess current prices or promotions; direct the prospect to the official registration page for those details.";
-  const result = await generateWithFreeRouter(SYSTEM + "\\n" + context, history);
+  const result = await generateWithFreeRouter(SYSTEM + "\n" + context, history);
   return result.text;
 }
