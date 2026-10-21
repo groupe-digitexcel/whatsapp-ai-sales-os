@@ -66,11 +66,11 @@ function buildAcademyContext(info: AcademySalesInfo | null) {
   ];
   if (!info) {
     lines.push("The live Academy API is temporarily unreachable. Do not state exact prices, discounts, deadlines, capacity, or availability. Direct the prospect to the official registration page for current details.");
-    return lines.join("\\n");
+    return lines.join("\n");
   }
   if (!info.available || !info.course) {
     lines.push("The official API reports that no published course is currently available. Do not imply that registration is open; direct the person to the official website for updates.");
-    return lines.join("\\n");
+    return lines.join("\n");
   }
 
   lines.push("Course (English): " + (info.course.titleEn || "Kingdom AI Academy practical AI training"));
@@ -99,7 +99,7 @@ function buildAcademyContext(info: AcademySalesInfo | null) {
     }
   }
   lines.push("Treat these API facts as the current source of truth. Never claim that a person has registered or paid; this API does not report individual transaction status.");
-  return lines.join("\\n");
+  return lines.join("\n");
 }
 
 const SYSTEM = `You are the independent WhatsApp AI SALES ASSISTANT for Kingdom AI Academy. Your job is to guide prospects through a helpful, adaptive sales conversation and help interested people make an informed purchase decision. You are NOT a student-support agent, tutor, course dashboard, enrollment manager, or component embedded in the Academy platform. WhatsApp is the sales funnel; the Academy website is the separate destination for registration and payment.
