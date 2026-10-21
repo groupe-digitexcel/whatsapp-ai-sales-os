@@ -51,20 +51,43 @@ export async function POST(req: NextRequest) {
   if (payload.object !== "whatsapp_business_account") return NextResponse.json({ok:true});
 
   const incoming = extractTextMessage(payload);
+  console.info("[whatsapp-webhook] signature accepted", {
+    object: payload.object,
+    entryCount: Array.isArray(payload.entry) ? payload.entry.length : 0,
+    hasTextMessage: Boolean(incoming),
+  });
   if (!incoming) return NextResponse.json({ok:true});
 
-  const supabase = db();
+  let supabase: ReturnType<typeof db>;
+  try {
+    supabase = db();
+  } catch (e: any) {
+    console.error("[whatsapp-webhook] Supabase client initialization failed", {
+      message: String(e?.message ?? e),
+    });
+    return NextResponse.json({ok:false, code:"SUPABASE_INIT_FAILED"}, {status:503});
+  }
 
   // Idempotency: do not reply twice to the same Meta message, including concurrent deliveries.
   const {data: existing, error: lookupError} = await supabase.from("webhook_events")
     .select("id").eq("event_id", incoming.messageId).maybeSingle();
-  if (lookupError) return NextResponse.json({ok:false, error:"Event lookup failed"}, {status:503});
+  if (lookupError) {
+    console.error("[whatsapp-webhook] Event lookup failed", {
+      code: lookupError.code,
+      message: lookupError.message,
+    });
+    return NextResponse.json({ok:false, code:"EVENT_LOOKUP_FAILED"}, {status:503});
+  }
   if (existing) return NextResponse.json({ok:true, duplicate:true});
   const {error: insertEventError} = await supabase.from("webhook_events")
     .insert({event_id: incoming.messageId, payload, status:"processing"});
   if (insertEventError) {
     if (insertEventError.code === "23505") return NextResponse.json({ok:true, duplicate:true});
-    return NextResponse.json({ok:false, error:"Event registration failed"}, {status:503});
+    console.error("[whatsapp-webhook] Event registration failed", {
+      code: insertEventError.code,
+      message: insertEventError.message,
+    });
+    return NextResponse.json({ok:false, code:"EVENT_REGISTRATION_FAILED"}, {status:503});
   }
 
   try {
@@ -140,6 +163,9 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ok:true});
   } catch (e:any) {
+    console.error("[whatsapp-webhook] Message processing failed", {
+      message: String(e?.message ?? e),
+    });
     await supabase.from("webhook_events").update({status:"failed",error_message:String(e?.message ?? e)}).eq("event_id",incoming.messageId);
     // Return 200 after recording failure to avoid an uncontrolled retry storm.
     return NextResponse.json({ok:true, handled_error:true});
