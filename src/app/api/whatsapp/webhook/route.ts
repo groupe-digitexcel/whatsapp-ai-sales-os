@@ -69,6 +69,7 @@ async function processIncomingMessage(supabase: ReturnType<typeof db>, payload: 
       throwDbError("event_registration", insertEventError);
       eventRegistered = true;
     }
+    console.info("[whatsapp-webhook] database_event_saved", { requestId, messageId: incoming.messageId });
 
     const { data: customer, error: customerError } = await supabase.from("customers")
       .upsert({
@@ -79,6 +80,7 @@ async function processIncomingMessage(supabase: ReturnType<typeof db>, payload: 
       .select("id,marketing_opt_out").single();
     throwDbError("customer_upsert", customerError);
     if (!customer) throw new Error("Customer upsert returned no customer");
+    console.info("[whatsapp-webhook] customer_saved", { requestId, messageId: incoming.messageId });
 
     const { data: foundConversation, error: conversationLookupError } = await supabase.from("conversations")
       .select("*").eq("customer_id", customer.id).eq("status", "open").order("updated_at", { ascending: false }).limit(1).maybeSingle();
@@ -93,6 +95,7 @@ async function processIncomingMessage(supabase: ReturnType<typeof db>, payload: 
       conversation = created.data;
     }
     if (!conversation) throw new Error("Conversation creation returned no row");
+    console.info("[whatsapp-webhook] conversation_ready", { requestId, messageId: incoming.messageId });
 
     // Meta may retry a delivery after a later step fails. Reuse the original inbound
     // row rather than letting the unique provider-message index block recovery.
@@ -109,6 +112,7 @@ async function processIncomingMessage(supabase: ReturnType<typeof db>, payload: 
       });
       throwDbError("inbound_message_insert", inboundInsertError);
     }
+    console.info("[whatsapp-webhook] inbound_message_saved", { requestId, messageId: incoming.messageId, wasAlreadyPresent: Boolean(existingInbound) });
 
     // If an outbound reply was already persisted for this inbound message, finish
     // the event without sending the same answer twice on a Meta retry.
@@ -163,13 +167,17 @@ async function processIncomingMessage(supabase: ReturnType<typeof db>, payload: 
       content: message.body
     }));
     const reply = await generateSalesReply(aiHistory, conversation.active_product);
+    console.info("[whatsapp-webhook] ai_reply_generated", { requestId, messageId: incoming.messageId, replyLength: reply.length });
+    console.info("[whatsapp-webhook] whatsapp_send_started", { requestId, messageId: incoming.messageId });
     const wa = await sendWhatsAppText(incoming.from, reply);
+    console.info("[whatsapp-webhook] whatsapp_send_accepted", { requestId, messageId: incoming.messageId, providerMessageIdPresent: Boolean(wa?.messages?.[0]?.id) });
 
     const { error: outboundInsertError } = await supabase.from("messages").insert({
       conversation_id: conversation.id, direction: "outbound", body: reply,
       provider_message_id: wa?.messages?.[0]?.id ?? null, reply_to_provider_message_id: incoming.messageId
     });
     throwDbError("outbound_message_insert", outboundInsertError);
+    console.info("[whatsapp-webhook] outbound_message_saved", { requestId, messageId: incoming.messageId });
 
     const funnelState = classifySalesStage(incoming.text, reply);
     const { error: conversationUpdateError } = await supabase.from("conversations").update({
@@ -184,6 +192,7 @@ async function processIncomingMessage(supabase: ReturnType<typeof db>, payload: 
       .update({ status: "processed", processed_at: new Date().toISOString(), error_message: null })
       .eq("event_id", incoming.messageId);
     throwDbError("mark_event_processed", eventProcessedError);
+    console.info("[whatsapp-webhook] message_processing_completed", { requestId, messageId: incoming.messageId });
     return { duplicate: false, optedOut: false };
   } catch (error: any) {
     const message = String(error?.message ?? error).slice(0, 500);
