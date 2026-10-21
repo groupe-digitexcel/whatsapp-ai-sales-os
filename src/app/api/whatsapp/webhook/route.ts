@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/src/lib/supabase";
-import { extractTextMessage, verifyMetaSignature } from "@/src/lib/webhook";
+import { extractTextMessages, verifyMetaSignature, type IncomingTextMessage } from "@/src/lib/webhook";
 import { generateSalesReply } from "@/src/lib/sales-agent";
 import { sendWhatsAppText } from "@/src/lib/whatsapp";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 function classifySalesStage(customerText: string, assistantText: string): { stage: string; objectionType: string | null } {
   const text = customerText.toLowerCase();
@@ -28,146 +29,221 @@ function classifySalesStage(customerText: string, assistantText: string): { stag
   return { stage: "ENGAGED", objectionType: null };
 }
 
+function isFrench(text: string) {
+  return /bonjour|bonsoir|merci|prix|combien|co[uû]t|inscri|formation|cours|paiement|fran[cç]ais|je veux|je suis|s'il vous plaît|svp/.test(text.toLowerCase());
+}
+
+function throwDbError(step: string, error: { code?: string; message?: string } | null | undefined) {
+  if (error) {
+    console.error("[whatsapp-webhook] Database operation failed", {
+      step,
+      code: error.code ?? "UNKNOWN",
+      message: error.message ?? "Unknown database error"
+    });
+    throw new Error(step + " failed (" + (error.code ?? "UNKNOWN") + ")");
+  }
+}
+
+async function processIncomingMessage(supabase: ReturnType<typeof db>, payload: any, incoming: IncomingTextMessage) {
+  let eventRegistered = false;
+  try {
+    const { data: existing, error: lookupError } = await supabase.from("webhook_events")
+      .select("id,status,received_at").eq("event_id", incoming.messageId).maybeSingle();
+    throwDbError("event_lookup", lookupError);
+
+    if (existing) {
+      const ageMs = Date.now() - new Date(existing.received_at).getTime();
+      if (existing.status === "processed" || (existing.status === "processing" && ageMs < 5 * 60 * 1000)) {
+        return { duplicate: true };
+      }
+      const { error: retryError } = await supabase.from("webhook_events").update({
+        payload, status: "processing", error_message: null, processed_at: null, received_at: new Date().toISOString()
+      }).eq("event_id", incoming.messageId);
+      throwDbError("event_retry_registration", retryError);
+      eventRegistered = true;
+    } else {
+      const { error: insertEventError } = await supabase.from("webhook_events")
+        .insert({ event_id: incoming.messageId, payload, status: "processing" });
+      if (insertEventError?.code === "23505") return { duplicate: true };
+      throwDbError("event_registration", insertEventError);
+      eventRegistered = true;
+    }
+
+    const { data: customer, error: customerError } = await supabase.from("customers")
+      .upsert({
+        whatsapp_number: incoming.from,
+        language: isFrench(incoming.text) ? "fr" : "en",
+        updated_at: new Date().toISOString()
+      }, { onConflict: "whatsapp_number" })
+      .select("id,marketing_opt_out").single();
+    throwDbError("customer_upsert", customerError);
+    if (!customer) throw new Error("Customer upsert returned no customer");
+
+    const { data: foundConversation, error: conversationLookupError } = await supabase.from("conversations")
+      .select("*").eq("customer_id", customer.id).eq("status", "open").order("updated_at", { ascending: false }).limit(1).maybeSingle();
+    throwDbError("conversation_lookup", conversationLookupError);
+
+    let conversation = foundConversation;
+    if (!conversation) {
+      const created = await supabase.from("conversations")
+        .insert({ customer_id: customer.id, stage: "NEW", status: "open" })
+        .select("*").single();
+      throwDbError("conversation_create", created.error);
+      conversation = created.data;
+    }
+    if (!conversation) throw new Error("Conversation creation returned no row");
+
+    const { error: inboundInsertError } = await supabase.from("messages").insert({
+      conversation_id: conversation.id,
+      direction: "inbound",
+      body: incoming.text,
+      provider_message_id: incoming.messageId,
+      created_at: incoming.timestamp
+    });
+    throwDbError("inbound_message_insert", inboundInsertError);
+
+    const stopRequested = /^(stop|stop all|unsubscribe|unsub|cancel|no more messages|do not message|don't message|arr[eê]te(?:z)?|arr[eê]ter|désabonn(?:e|ez|er|ement)?|ne plus m'envoyer de messages|ne m'envoyez plus de messages)$/i.test(incoming.text.trim());
+    if (stopRequested) {
+      const { error: optOutError } = await supabase.from("customers")
+        .update({ marketing_opt_out: true, marketing_consent_at: null, marketing_consent_source: null, updated_at: new Date().toISOString() })
+        .eq("id", customer.id);
+      throwDbError("save_marketing_opt_out", optOutError);
+
+      const { error: followUpCancelError } = await supabase.from("follow_ups")
+        .update({ status: "cancelled" }).eq("conversation_id", conversation.id).eq("status", "pending");
+      throwDbError("cancel_follow_ups", followUpCancelError);
+
+      const { error: outboxCancelError } = await supabase.from("outbox_messages")
+        .update({ status: "cancelled", last_error: "Contact opted out of proactive messaging" })
+        .eq("conversation_id", conversation.id).eq("status", "pending");
+      throwDbError("cancel_outbox_messages", outboxCancelError);
+
+      const confirmation = "You are unsubscribed from promotional messages. No further promotional messages will be sent. If you message us again, we may still reply to your request.\n\nVous êtes désabonné(e) des messages promotionnels. Aucun autre message promotionnel ne sera envoyé. Si vous nous écrivez à nouveau, nous pourrons répondre à votre demande.";
+      const wa = await sendWhatsAppText(incoming.from, confirmation);
+      const { error: outboundInsertError } = await supabase.from("messages").insert({
+        conversation_id: conversation.id, direction: "outbound", body: confirmation,
+        provider_message_id: wa?.messages?.[0]?.id ?? null
+      });
+      throwDbError("opt_out_confirmation_insert", outboundInsertError);
+      const { error: eventProcessedError } = await supabase.from("webhook_events")
+        .update({ status: "processed", processed_at: new Date().toISOString(), error_message: null })
+        .eq("event_id", incoming.messageId);
+      throwDbError("mark_opt_out_event_processed", eventProcessedError);
+      return { duplicate: false, optedOut: true };
+    }
+
+    const { data: history, error: historyError } = await supabase.from("messages")
+      .select("direction,body").eq("conversation_id", conversation.id)
+      .order("created_at", { ascending: true }).limit(20);
+    throwDbError("load_conversation_history", historyError);
+
+    const aiHistory = (history ?? []).map((message: any) => ({
+      role: message.direction === "inbound" ? "user" as const : "assistant" as const,
+      content: message.body
+    }));
+    const reply = await generateSalesReply(aiHistory, conversation.active_product);
+    const wa = await sendWhatsAppText(incoming.from, reply);
+
+    const { error: outboundInsertError } = await supabase.from("messages").insert({
+      conversation_id: conversation.id, direction: "outbound", body: reply,
+      provider_message_id: wa?.messages?.[0]?.id ?? null
+    });
+    throwDbError("outbound_message_insert", outboundInsertError);
+
+    const funnelState = classifySalesStage(incoming.text, reply);
+    const { error: conversationUpdateError } = await supabase.from("conversations").update({
+      stage: funnelState.stage,
+      objection_type: funnelState.objectionType,
+      last_customer_message_at: incoming.timestamp,
+      updated_at: new Date().toISOString()
+    }).eq("id", conversation.id);
+    throwDbError("conversation_update", conversationUpdateError);
+
+    const { error: eventProcessedError } = await supabase.from("webhook_events")
+      .update({ status: "processed", processed_at: new Date().toISOString(), error_message: null })
+      .eq("event_id", incoming.messageId);
+    throwDbError("mark_event_processed", eventProcessedError);
+    return { duplicate: false, optedOut: false };
+  } catch (error: any) {
+    const message = String(error?.message ?? error).slice(0, 500);
+    console.error("[whatsapp-webhook] Message processing failed", {
+      messageId: incoming.messageId,
+      step: message
+    });
+    if (eventRegistered) {
+      const { error: markFailedError } = await supabase.from("webhook_events")
+        .update({ status: "failed", error_message: message }).eq("event_id", incoming.messageId);
+      if (markFailedError) {
+        console.error("[whatsapp-webhook] Could not mark event failed", {
+          code: markFailedError.code,
+          message: markFailedError.message
+        });
+      }
+    }
+    throw error;
+  }
+}
 
 export async function GET(req: NextRequest) {
   const mode = req.nextUrl.searchParams.get("hub.mode");
   const token = req.nextUrl.searchParams.get("hub.verify_token");
   const challenge = req.nextUrl.searchParams.get("hub.challenge");
-  const expectedToken = process.env.WHATSAPP_VERIFY_TOKEN || process.env.META_VERIFY_TOKEN;
+  const expectedToken = (process.env.WHATSAPP_VERIFY_TOKEN || process.env.META_VERIFY_TOKEN)?.trim();
   if (mode === "subscribe" && expectedToken && token === expectedToken) {
-    return new NextResponse(challenge ?? "", {status:200});
+    return new NextResponse(challenge ?? "", { status: 200, headers: { "Cache-Control": "no-store" } });
   }
-  return new NextResponse("Forbidden", {status:403});
+  return new NextResponse("Forbidden", { status: 403, headers: { "Cache-Control": "no-store" } });
 }
 
 export async function POST(req: NextRequest) {
   const raw = await req.text();
   if (!verifyMetaSignature(raw, req.headers.get("x-hub-signature-256") ?? undefined)) {
-    return new NextResponse("Invalid signature", {status:401});
+    return new NextResponse("Invalid signature", { status: 401, headers: { "Cache-Control": "no-store" } });
   }
 
-  let payload:any;
-  try { payload = JSON.parse(raw); } catch { return new NextResponse("Bad JSON",{status:400}); }
-  if (payload.object !== "whatsapp_business_account") return NextResponse.json({ok:true});
+  let payload: any;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return new NextResponse("Bad JSON", { status: 400 });
+  }
 
-  const incoming = extractTextMessage(payload);
+  if (payload.object !== "whatsapp_business_account") return NextResponse.json({ ok: true });
+
+  const incomingMessages = extractTextMessages(payload);
   console.info("[whatsapp-webhook] signature accepted", {
     object: payload.object,
     entryCount: Array.isArray(payload.entry) ? payload.entry.length : 0,
-    hasTextMessage: Boolean(incoming),
+    textMessageCount: incomingMessages.length
   });
-  if (!incoming) return NextResponse.json({ok:true});
+  // Status callbacks and non-text events are valid Meta deliveries and require no reply.
+  if (!incomingMessages.length) return NextResponse.json({ ok: true, ignored: true });
 
   let supabase: ReturnType<typeof db>;
   try {
     supabase = db();
-  } catch (e: any) {
+  } catch (error: any) {
     console.error("[whatsapp-webhook] Supabase client initialization failed", {
-      message: String(e?.message ?? e),
+      message: String(error?.message ?? error)
     });
-    return NextResponse.json({ok:false, code:"SUPABASE_INIT_FAILED"}, {status:503});
+    return NextResponse.json({ ok: false, code: "SUPABASE_INIT_FAILED" }, { status: 503 });
   }
 
-  // Idempotency: do not reply twice to the same Meta message, including concurrent deliveries.
-  const {data: existing, error: lookupError} = await supabase.from("webhook_events")
-    .select("id").eq("event_id", incoming.messageId).maybeSingle();
-  if (lookupError) {
-    console.error("[whatsapp-webhook] Event lookup failed", {
-      code: lookupError.code,
-      message: lookupError.message,
-    });
-    return NextResponse.json({ok:false, code:"EVENT_LOOKUP_FAILED"}, {status:503});
-  }
-  if (existing) return NextResponse.json({ok:true, duplicate:true});
-  const {error: insertEventError} = await supabase.from("webhook_events")
-    .insert({event_id: incoming.messageId, payload, status:"processing"});
-  if (insertEventError) {
-    if (insertEventError.code === "23505") return NextResponse.json({ok:true, duplicate:true});
-    console.error("[whatsapp-webhook] Event registration failed", {
-      code: insertEventError.code,
-      message: insertEventError.message,
-    });
-    return NextResponse.json({ok:false, code:"EVENT_REGISTRATION_FAILED"}, {status:503});
-  }
-
-  try {
-    const {data: customer} = await supabase.from("customers")
-      .upsert({whatsapp_number: incoming.from}, {onConflict:"whatsapp_number"})
-      .select("id,marketing_opt_out").single();
-    if (!customer) throw new Error("Customer creation failed");
-
-    let {data: conversation} = await supabase.from("conversations")
-      .select("*").eq("customer_id", customer.id).eq("status","open").maybeSingle();
-    if (!conversation) {
-      const created = await supabase.from("conversations")
-        .insert({customer_id: customer.id, stage:"NEW", status:"open"})
-        .select("*").single();
-      conversation = created.data;
+  let processed = 0;
+  let duplicates = 0;
+  let failures = 0;
+  for (const incoming of incomingMessages) {
+    try {
+      const result = await processIncomingMessage(supabase, payload, incoming);
+      if (result.duplicate) duplicates++;
+      else processed++;
+    } catch {
+      failures++;
     }
-    if (!conversation) throw new Error("Conversation creation failed");
-
-    await supabase.from("messages").insert({
-      conversation_id: conversation.id, direction:"inbound", body:incoming.text,
-      provider_message_id:incoming.messageId, created_at:incoming.timestamp
-    });
-
-    // Honor explicit STOP requests. Opt-out suppresses proactive messages, not customer-initiated support.
-    const stopRequested = /^(stop|stop all|unsubscribe|unsub|cancel|no more messages|do not message|don't message|arr[eê]te(?:z)?|arr[eê]ter|désabonn(?:e|ez|er|ement)?|ne plus m'envoyer de messages|ne m'envoyez plus de messages)$/i.test(incoming.text.trim());
-    if (stopRequested) {
-      const {error: optOutError} = await supabase.from("customers")
-        .update({marketing_opt_out:true, marketing_consent_at:null, marketing_consent_source:null, updated_at:new Date().toISOString()})
-        .eq("id", customer.id);
-      if (optOutError) throw new Error("Could not save marketing opt-out");
-      const {error: followUpCancelError} = await supabase.from("follow_ups")
-        .update({status:"cancelled"}).eq("conversation_id", conversation.id).eq("status","pending");
-      if (followUpCancelError) throw new Error("Could not cancel pending follow-ups");
-      const {error: outboxCancelError} = await supabase.from("outbox_messages")
-        .update({status:"cancelled", last_error:"Contact opted out of proactive messaging"})
-        .eq("conversation_id", conversation.id).eq("status","pending");
-      if (outboxCancelError) throw new Error("Could not cancel queued messages");
-      const confirmation = "You are unsubscribed from promotional messages. No further promotional messages will be sent. If you message us again, we may still reply to your request.\n\nVous êtes désabonné(e) des messages promotionnels. Aucun autre message promotionnel ne sera envoyé. Si vous nous écrivez à nouveau, nous pourrons répondre à votre demande.";
-      const wa = await sendWhatsAppText(incoming.from, confirmation);
-      await supabase.from("messages").insert({
-        conversation_id: conversation.id, direction:"outbound", body:confirmation,
-        provider_message_id:wa?.messages?.[0]?.id ?? null
-      });
-      await supabase.from("webhook_events").update({status:"processed",processed_at:new Date().toISOString()}).eq("event_id",incoming.messageId);
-      return NextResponse.json({ok:true, opted_out:true});
-    }
-
-    const {data: history} = await supabase.from("messages")
-      .select("direction,body").eq("conversation_id",conversation.id)
-      .order("created_at",{ascending:true}).limit(20);
-
-    const aiHistory = (history ?? []).map((m:any)=>({
-      role: m.direction === "inbound" ? "user" as const : "assistant" as const,
-      content: m.body
-    }));
-
-    // The sales assistant is independent of the Academy platform API. It shares the public registration link when appropriate.
-    const reply = await generateSalesReply(aiHistory, conversation.active_product);
-    const wa = await sendWhatsAppText(incoming.from, reply);
-
-    await supabase.from("messages").insert({
-      conversation_id: conversation.id, direction:"outbound", body:reply,
-      provider_message_id:wa?.messages?.[0]?.id ?? null
-    });
-    const funnelState = classifySalesStage(incoming.text, reply);
-    await supabase.from("conversations").update({
-      stage: funnelState.stage,
-      objection_type: funnelState.objectionType,
-      last_customer_message_at:incoming.timestamp,
-      updated_at:new Date().toISOString()
-    }).eq("id",conversation.id);
-    await supabase.from("webhook_events").update({status:"processed",processed_at:new Date().toISOString()}).eq("event_id",incoming.messageId);
-
-    return NextResponse.json({ok:true});
-  } catch (e:any) {
-    console.error("[whatsapp-webhook] Message processing failed", {
-      message: String(e?.message ?? e),
-    });
-    await supabase.from("webhook_events").update({status:"failed",error_message:String(e?.message ?? e)}).eq("event_id",incoming.messageId);
-    // Return 200 after recording failure to avoid an uncontrolled retry storm.
-    return NextResponse.json({ok:true, handled_error:true});
   }
+
+  if (failures) {
+    return NextResponse.json({ ok: false, processed, duplicates, failures }, { status: 500 });
+  }
+  return NextResponse.json({ ok: true, processed, duplicates });
 }
