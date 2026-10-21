@@ -14,6 +14,30 @@ export async function sendWhatsAppText(to: string, body: string) {
       text: {preview_url: false, body}
     })
   });
-  if (!res.ok) throw new Error(`WhatsApp send failed: ${res.status} ${await res.text()}`);
-  return res.json();
+  if (!res.ok) {
+    let providerCode: string | number | undefined;
+    let providerType: string | undefined;
+    let providerMessage: string | undefined;
+    try {
+      const payload = await res.json();
+      providerCode = payload?.error?.code;
+      providerType = typeof payload?.error?.type === "string" ? payload.error.type.slice(0, 80) : undefined;
+      providerMessage = typeof payload?.error?.message === "string" ? payload.error.message.slice(0, 240) : undefined;
+    } catch {
+      // Do not include an unparsed provider response in logs or thrown errors.
+    }
+    console.error("[whatsapp-send] Graph API rejected message", {
+      httpStatus: res.status,
+      providerCode,
+      providerType,
+      providerMessage
+    });
+    throw new Error(`WhatsApp send failed with HTTP ${res.status}${providerCode ? " (provider code " + providerCode + ")" : ""}`);
+  }
+  const payload = await res.json();
+  console.info("[whatsapp-send] Graph API accepted message", {
+    httpStatus: res.status,
+    messageIdPresent: Boolean(payload?.messages?.[0]?.id)
+  });
+  return payload;
 }
