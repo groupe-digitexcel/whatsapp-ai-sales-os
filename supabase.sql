@@ -33,11 +33,16 @@ create table if not exists messages (
   direction text not null check(direction in ('inbound','outbound')),
   body text not null,
   provider_message_id text,
+  reply_to_provider_message_id text,
   created_at timestamptz not null default now()
 );
 
 create unique index if not exists messages_provider_id_unique
 on messages(provider_message_id) where provider_message_id is not null;
+
+alter table messages add column if not exists reply_to_provider_message_id text;
+create unique index if not exists messages_reply_to_provider_unique
+on messages(reply_to_provider_message_id) where reply_to_provider_message_id is not null;
 
 create table if not exists webhook_events (
   id uuid primary key default gen_random_uuid(),
