@@ -23,18 +23,26 @@ export async function GET() {
   };
 
   let academySalesInfoReachable = false;
+  let academySalesInfoHttpStatus: number | null = null;
+  let academySalesInfoDiagnostic: { stage?: string; code?: string } | null = null;
   let academyCourseAvailable: boolean | null = null;
   try {
     const response = await fetch(process.env.ACADEMY_SALES_INFO_URL || "https://kingdom-ai-academy.vercel.app/api/public/sales-info", {
       cache: "no-store", signal: AbortSignal.timeout(3500)
     });
-    if (response.ok) {
-      const info = await response.json();
-      academySalesInfoReachable = info?.ok === true && typeof info?.available === "boolean";
-      academyCourseAvailable = typeof info?.available === "boolean" ? info.available : null;
+    academySalesInfoHttpStatus = response.status;
+    const info = await response.json().catch(() => null);
+    academySalesInfoReachable = response.ok && info?.ok === true && typeof info.available === "boolean";
+    academyCourseAvailable = typeof info?.available === "boolean" ? info.available : null;
+    if (info?.diagnostic && typeof info.diagnostic === "object") {
+      academySalesInfoDiagnostic = {
+        stage: typeof info.diagnostic.stage === "string" ? info.diagnostic.stage : undefined,
+        code: typeof info.diagnostic.code === "string" ? info.diagnostic.code : undefined,
+      };
     }
-  } catch {
+  } catch (error: any) {
     academySalesInfoReachable = false;
+    academySalesInfoDiagnostic = { stage: "network_or_json", code: String(error?.name ?? "FETCH_FAILED").slice(0, 60) };
   }
 
   let databaseReachable = false;
@@ -62,7 +70,8 @@ export async function GET() {
     ok,
     service: "whatsapp-ai-sales-os",
     status: ok ? "ready-for-live-message-test" : "configuration-or-database-check-failed",
-    checks: { ...env, databaseReachable, academySalesInfoReachable, academyCourseAvailable },
+    checks: { ...env, databaseReachable, academySalesInfoReachable, academySalesInfoHttpStatus, academyCourseAvailable },
+    diagnostics: { academySalesInfo: academySalesInfoDiagnostic },
     databaseErrorCode,
     note: "This endpoint reports configuration presence, database reachability, and public Academy sales-info API connectivity. It does not prove Meta signature verification, WhatsApp delivery, or individual registration/payment status.",
     time: new Date().toISOString()
