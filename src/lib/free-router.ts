@@ -11,6 +11,13 @@ type Provider = {
 
 function providers(): Provider[] {
   const list: Provider[] = [];
+  // Prefer the explicitly configured OpenAI account, then try optional alternatives.
+  if (process.env.OPENAI_API_KEY) list.push({
+    name: "openai",
+    key: process.env.OPENAI_API_KEY,
+    baseURL: "https://api.openai.com/v1",
+    model: process.env.OPENAI_MODEL || "gpt-4o-mini"
+  });
   if (process.env.GEMINI_API_KEY) list.push({
     name: "gemini",
     key: process.env.GEMINI_API_KEY,
@@ -54,6 +61,7 @@ export async function generateWithFreeRouter(
       lastError = p.name + ": empty response";
     } catch (error: any) {
       lastError = p.name + ": " + String(error?.message ?? error);
+      console.error("[sales-agent] AI provider failed", { provider: p.name, message: lastError });
     }
   }
   throw new Error(lastError);
