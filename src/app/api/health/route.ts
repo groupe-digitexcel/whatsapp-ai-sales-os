@@ -19,7 +19,7 @@ export async function GET() {
       process.env.OPENROUTER_API_KEY
     ),
     adminPassword: Boolean(process.env.ADMIN_DASHBOARD_PASSWORD),
-    academySalesInfoUrlConfigured: Boolean(process.env.ACADEMY_SALES_INFO_URL || true),
+    academySalesInfoUrlConfigured: Boolean((process.env.ACADEMY_SALES_INFO_URL || "https://kingdom-ai-academy.vercel.app/api/public/sales-info").trim()),
   };
 
   let academySalesInfoReachable = false;
