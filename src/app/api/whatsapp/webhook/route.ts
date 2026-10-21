@@ -93,14 +93,34 @@ async function processIncomingMessage(supabase: ReturnType<typeof db>, payload: 
     }
     if (!conversation) throw new Error("Conversation creation returned no row");
 
-    const { error: inboundInsertError } = await supabase.from("messages").insert({
-      conversation_id: conversation.id,
-      direction: "inbound",
-      body: incoming.text,
-      provider_message_id: incoming.messageId,
-      created_at: incoming.timestamp
-    });
-    throwDbError("inbound_message_insert", inboundInsertError);
+    // Meta may retry a delivery after a later step fails. Reuse the original inbound
+    // row rather than letting the unique provider-message index block recovery.
+    const { data: existingInbound, error: inboundLookupError } = await supabase.from("messages")
+      .select("id").eq("provider_message_id", incoming.messageId).maybeSingle();
+    throwDbError("inbound_message_lookup", inboundLookupError);
+    if (!existingInbound) {
+      const { error: inboundInsertError } = await supabase.from("messages").insert({
+        conversation_id: conversation.id,
+        direction: "inbound",
+        body: incoming.text,
+        provider_message_id: incoming.messageId,
+        created_at: incoming.timestamp
+      });
+      throwDbError("inbound_message_insert", inboundInsertError);
+    }
+
+    // If an outbound reply was already persisted for this inbound message, finish
+    // the event without sending the same answer twice on a Meta retry.
+    const { data: existingReply, error: replyLookupError } = await supabase.from("messages")
+      .select("id").eq("reply_to_provider_message_id", incoming.messageId).maybeSingle();
+    throwDbError("reply_idempotency_lookup", replyLookupError);
+    if (existingReply) {
+      const { error: alreadyProcessedError } = await supabase.from("webhook_events")
+        .update({ status: "processed", processed_at: new Date().toISOString(), error_message: null })
+        .eq("event_id", incoming.messageId);
+      throwDbError("mark_retried_event_processed", alreadyProcessedError);
+      return { duplicate: true };
+    }
 
     const stopRequested = /^(stop|stop all|unsubscribe|unsub|cancel|no more messages|do not message|don't message|arr[eê]te(?:z)?|arr[eê]ter|désabonn(?:e|ez|er|ement)?|ne plus m'envoyer de messages|ne m'envoyez plus de messages)$/i.test(incoming.text.trim());
     if (stopRequested) {
@@ -122,7 +142,7 @@ async function processIncomingMessage(supabase: ReturnType<typeof db>, payload: 
       const wa = await sendWhatsAppText(incoming.from, confirmation);
       const { error: outboundInsertError } = await supabase.from("messages").insert({
         conversation_id: conversation.id, direction: "outbound", body: confirmation,
-        provider_message_id: wa?.messages?.[0]?.id ?? null
+        provider_message_id: wa?.messages?.[0]?.id ?? null, reply_to_provider_message_id: incoming.messageId
       });
       throwDbError("opt_out_confirmation_insert", outboundInsertError);
       const { error: eventProcessedError } = await supabase.from("webhook_events")
@@ -146,7 +166,7 @@ async function processIncomingMessage(supabase: ReturnType<typeof db>, payload: 
 
     const { error: outboundInsertError } = await supabase.from("messages").insert({
       conversation_id: conversation.id, direction: "outbound", body: reply,
-      provider_message_id: wa?.messages?.[0]?.id ?? null
+      provider_message_id: wa?.messages?.[0]?.id ?? null, reply_to_provider_message_id: incoming.messageId
     });
     throwDbError("outbound_message_insert", outboundInsertError);
 
