@@ -19,7 +19,23 @@ export async function GET() {
       process.env.OPENROUTER_API_KEY
     ),
     adminPassword: Boolean(process.env.ADMIN_DASHBOARD_PASSWORD),
+    academySalesInfoUrlConfigured: Boolean(process.env.ACADEMY_SALES_INFO_URL || true),
   };
+
+  let academySalesInfoReachable = false;
+  let academyCourseAvailable: boolean | null = null;
+  try {
+    const response = await fetch(process.env.ACADEMY_SALES_INFO_URL || "https://kingdom-ai-academy.vercel.app/api/public/sales-info", {
+      cache: "no-store", signal: AbortSignal.timeout(3500)
+    });
+    if (response.ok) {
+      const info = await response.json();
+      academySalesInfoReachable = info?.ok === true && typeof info?.available === "boolean";
+      academyCourseAvailable = typeof info?.available === "boolean" ? info.available : null;
+    }
+  } catch {
+    academySalesInfoReachable = false;
+  }
 
   let databaseReachable = false;
   let databaseErrorCode: string | null = null;
@@ -41,14 +57,14 @@ export async function GET() {
     env.whatsappPhoneNumberId &&
     env.aiProvider;
 
-  const ok = requiredConfigured && databaseReachable;
+  const ok = requiredConfigured && databaseReachable && academySalesInfoReachable;
   return NextResponse.json({
     ok,
     service: "whatsapp-ai-sales-os",
     status: ok ? "ready-for-live-message-test" : "configuration-or-database-check-failed",
-    checks: { ...env, databaseReachable },
+    checks: { ...env, databaseReachable, academySalesInfoReachable, academyCourseAvailable },
     databaseErrorCode,
-    note: "This endpoint reports configuration presence and database reachability only. It does not prove Meta signature verification, WhatsApp delivery, or Academy registration/payment integration.",
+    note: "This endpoint reports configuration presence, database reachability, and public Academy sales-info API connectivity. It does not prove Meta signature verification, WhatsApp delivery, or individual registration/payment status.",
     time: new Date().toISOString()
   }, {
     status: ok ? 200 : 503,
