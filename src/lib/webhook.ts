@@ -1,8 +1,13 @@
 import crypto from "crypto";
 
+export type IncomingTextMessage = {
+  messageId: string;
+  from: string;
+  text: string;
+  timestamp: string;
+};
+
 export function verifyMetaSignature(rawBody: string, signature?: string) {
-  // Meta signs the exact raw request body with the app secret. Trim accidental
-  // whitespace from a secret pasted into the deployment environment.
   const secret = process.env.META_APP_SECRET?.trim();
   if (!secret) {
     console.error("[whatsapp-webhook] META_APP_SECRET is missing in this deployment");
@@ -22,26 +27,37 @@ export function verifyMetaSignature(rawBody: string, signature?: string) {
   const expected = crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest();
   const received = Buffer.from(receivedHex, "hex");
   const valid = expected.length === received.length && crypto.timingSafeEqual(expected, received);
-  if (!valid) console.error("[whatsapp-webhook] Meta signature mismatch; check that META_APP_SECRET belongs to the Meta app sending this webhook");
+  if (!valid) {
+    console.error("[whatsapp-webhook] Meta signature mismatch; verify that META_APP_SECRET belongs to the Meta app configured for this callback");
+  }
   return valid;
 }
 
-export function extractTextMessage(payload: any) {
-  // Meta can batch multiple entries/changes/messages in one webhook delivery.
+/** Extract every text message in a Meta delivery; a single delivery can contain multiple messages. */
+export function extractTextMessages(payload: any): IncomingTextMessage[] {
+  const extracted: IncomingTextMessage[] = [];
   for (const entry of payload?.entry ?? []) {
     for (const change of entry?.changes ?? []) {
       const value = change?.value;
-      const messages = value?.messages ?? [];
-      for (const msg of messages) {
-        if (!msg || msg.type !== "text" || !msg.id || !msg.from) continue;
-        return {
+      for (const msg of value?.messages ?? []) {
+        const text = typeof msg?.text?.body === "string" ? msg.text.body.trim() : "";
+        if (msg?.type !== "text" || !msg?.id || !msg?.from || !text) continue;
+        const seconds = Number(msg.timestamp);
+        extracted.push({
           messageId: String(msg.id),
           from: String(msg.from),
-          text: String(msg.text?.body ?? ""),
-          timestamp: msg.timestamp ? new Date(Number(msg.timestamp) * 1000).toISOString() : new Date().toISOString()
-        };
+          text,
+          timestamp: Number.isFinite(seconds) && seconds > 0
+            ? new Date(seconds * 1000).toISOString()
+            : new Date().toISOString()
+        });
       }
     }
   }
-  return null;
+  return extracted;
+}
+
+// Backward-compatible single-message helper for any other route or test importing it.
+export function extractTextMessage(payload: any): IncomingTextMessage | null {
+  return extractTextMessages(payload)[0] ?? null;
 }
