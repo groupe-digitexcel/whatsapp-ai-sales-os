@@ -51,6 +51,36 @@ export default function AdminDashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [testRecipient, setTestRecipient] = useState("+237657467500");
+  const [testSending, setTestSending] = useState(false);
+  const [testResult, setTestResult] = useState("");
+
+  const sendControlledTest = async () => {
+    setTestSending(true);
+    setTestResult("");
+    try {
+      const response = await fetch("/api/admin/test-whatsapp", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${password}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ to: testRecipient }),
+        cache: "no-store",
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) {
+        const providerMessage = result?.providerError?.message;
+        setTestResult(`NOT SENT: ${result.error || "Request failed"}${providerMessage ? ` — ${providerMessage}` : ""}`);
+      } else {
+        setTestResult(`Meta accepted the test message. Message ID: ${result.messageId || "not returned"}. This does not yet confirm delivery.`);
+      }
+    } catch {
+      setTestResult("NOT CONFIRMED: Could not reach the test-send endpoint.");
+    } finally {
+      setTestSending(false);
+    }
+  };
 
   const loadDashboard = useCallback(async (key = password) => {
     setLoading(true);
@@ -118,6 +148,21 @@ export default function AdminDashboardPage() {
 
         {data && (
           <>
+            <section style={{ ...cardStyle, marginBottom: 20, border: "1px solid #d9def8" }}>
+              <h2 style={{ margin: "0 0 6px", fontSize: 20 }}>Controlled outbound test</h2>
+              <p style={{ color: "#667085", margin: "0 0 14px", lineHeight: 1.55, fontSize: 13 }}>
+                Sends Meta's standard hello_world template from the configured Meta test sender only. A safety check blocks sending if this deployment is configured with the real business phone-number ID.
+              </p>
+              <label htmlFor="test-recipient" style={{ display: "block", fontWeight: 700, fontSize: 13, marginBottom: 7 }}>Recipient WhatsApp number</label>
+              <input id="test-recipient" type="tel" value={testRecipient} onChange={(event) => setTestRecipient(event.target.value)} style={{ width: "100%", maxWidth: 380, boxSizing: "border-box", padding: 12, border: "1px solid #ccd4e2", borderRadius: 9, fontSize: 15, marginBottom: 12 }} />
+              <div>
+                <button onClick={() => void sendControlledTest()} disabled={testSending || !testRecipient.trim()} style={{ background: "#3545a5", color: "#fff", border: 0, borderRadius: 9, padding: "11px 15px", fontWeight: 800, cursor: testSending ? "wait" : "pointer" }}>
+                  {testSending ? "Sending test…" : "Send one test message"}
+                </button>
+              </div>
+              {testResult && <p role="status" style={{ margin: "12px 0 0", padding: 12, background: "#f7f8fc", borderRadius: 8, lineHeight: 1.5, overflowWrap: "anywhere" }}>{testResult}</p>}
+            </section>
+
             <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14, marginBottom: 22 }}>
               {metricCards.map(([label, value, description]) => (
                 <div key={label} style={cardStyle}>
