@@ -6,6 +6,7 @@ type HistoryMessage = { role: "user" | "assistant"; content: string };
 const SITE_URL = PRODUCTS.kingdom_ai_academy.siteUrl;
 const REGISTRATION_URL = PRODUCTS.kingdom_ai_academy.registrationUrl;
 const SALES_INFO_URL = process.env.ACADEMY_SALES_INFO_URL || PRODUCTS.kingdom_ai_academy.salesInfoUrl;
+const LIVE_ACADEMY_INTEGRATION_ENABLED = process.env.ACADEMY_LIVE_SALES_INFO_ENABLED === "true";
 
 type AcademySalesInfo = {
   ok: boolean;
@@ -65,7 +66,7 @@ function buildAcademyContext(info: AcademySalesInfo | null) {
     "Official registration URL: " + REGISTRATION_URL
   ];
   if (!info) {
-    lines.push("The live Academy API is temporarily unreachable. Do not state exact prices, discounts, deadlines, capacity, or availability. Direct the prospect to the official registration page for current details.");
+    lines.push("Live Academy data is not connected to this sales session. The sales assistant must remain fully operational without it. Do not state exact prices, discounts, deadlines, capacity, or availability; direct the prospect to the official registration page for current details.");
     return lines.join("\n");
   }
   if (!info.available || !info.course) {
@@ -171,8 +172,9 @@ export async function generateSalesReply(history: HistoryMessage[], activeProduc
     return testModeReply(history);
   }
 
-  const academyInfo = await getAcademySalesInfo();
-  const context = "Active product: Kingdom AI Academy practical AI training. This assistant is the WhatsApp sales funnel and the Academy website is the source of truth for current course, cohort, price, promotion, and capacity information.\n" + buildAcademyContext(academyInfo);
+  // The Academy API is an optional enrichment only. The default path makes no network call to the Academy, so its uptime cannot block WhatsApp replies. Enable explicitly only when desired.
+  const academyInfo = LIVE_ACADEMY_INTEGRATION_ENABLED ? await getAcademySalesInfo() : null;
+  const context = "Active product: Kingdom AI Academy practical AI training. This WhatsApp Sales OS is an independent service. Academy data is optional; never rely on it for webhook intake or reply generation. The official registration page is the source of truth for current course, cohort, price, promotion, and capacity information.\n" + buildAcademyContext(academyInfo);
   try {
     const result = await generateWithFreeRouter(SYSTEM + "\n" + context, history);
     return result.text;
