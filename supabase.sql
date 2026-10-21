@@ -9,6 +9,11 @@ create table if not exists customers (
   updated_at timestamptz not null default now()
 );
 
+-- Keep existing installations and fresh installs aligned with the current app code.
+alter table customers add column if not exists marketing_opt_out boolean not null default false;
+alter table customers add column if not exists marketing_consent_at timestamptz;
+alter table customers add column if not exists marketing_consent_source text;
+
 create table if not exists conversations (
   id uuid primary key default gen_random_uuid(),
   customer_id uuid not null references customers(id) on delete cascade,
@@ -79,4 +84,5 @@ alter table webhook_events enable row level security;
 alter table outbox_messages enable row level security;
 alter table follow_ups enable row level security;
 
--- Server-side service-role access is used by the webhook. Add authenticated admin policies later for the dashboard.
+-- The application uses the service-role key only in server-side routes.
+-- Never expose SUPABASE_SERVICE_ROLE_KEY through a NEXT_PUBLIC_ variable.
