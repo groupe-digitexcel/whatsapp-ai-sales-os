@@ -44,7 +44,8 @@ function throwDbError(step: string, error: { code?: string; message?: string } |
   }
 }
 
-async function processIncomingMessage(supabase: ReturnType<typeof db>, payload: any, incoming: IncomingTextMessage) {
+async function processIncomingMessage(supabase: ReturnType<typeof db>, payload: any, incoming: IncomingTextMessage, requestId: string) {
+  console.info("[whatsapp-webhook] message_processing_started", { requestId, messageId: incoming.messageId });
   let eventRegistered = false;
   try {
     const { data: existing, error: lookupError } = await supabase.from("webhook_events")
@@ -186,7 +187,8 @@ async function processIncomingMessage(supabase: ReturnType<typeof db>, payload: 
     return { duplicate: false, optedOut: false };
   } catch (error: any) {
     const message = String(error?.message ?? error).slice(0, 500);
-    console.error("[whatsapp-webhook] Message processing failed", {
+    console.error("[whatsapp-webhook] message_processing_failed", {
+      requestId,
       messageId: incoming.messageId,
       step: message
     });
@@ -216,37 +218,88 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const raw = await req.text();
-  if (!verifyMetaSignature(raw, req.headers.get("x-hub-signature-256") ?? undefined)) {
-    return new NextResponse("Invalid signature", { status: 401, headers: { "Cache-Control": "no-store" } });
+  const requestId = req.headers.get("x-vercel-id") || crypto.randomUUID();
+  const startedAt = Date.now();
+  const signature = req.headers.get("x-hub-signature-256") ?? undefined;
+  console.info("[whatsapp-webhook] request_received", {
+    requestId,
+    method: req.method,
+    path: req.nextUrl.pathname,
+    signatureHeaderPresent: Boolean(signature),
+    contentType: req.headers.get("content-type") ?? "missing",
+    deployment: process.env.VERCEL_GIT_COMMIT_SHA ? process.env.VERCEL_GIT_COMMIT_SHA.slice(0, 12) : "unknown"
+  });
+
+  let raw: string;
+  try {
+    raw = await req.text();
+  } catch (error: any) {
+    console.error("[whatsapp-webhook] request_body_read_failed", {
+      requestId,
+      errorName: String(error?.name ?? "BODY_READ_FAILED").slice(0, 60)
+    });
+    return NextResponse.json({ ok: false, code: "BODY_READ_FAILED", requestId }, {
+      status: 400,
+      headers: { "Cache-Control": "no-store" }
+    });
   }
+
+  console.info("[whatsapp-webhook] request_body_read", { requestId, bodyBytes: Buffer.byteLength(raw, "utf8") });
+  const signatureValid = verifyMetaSignature(raw, signature);
+  if (!signatureValid) {
+    console.warn("[whatsapp-webhook] signature_validation_failed", {
+      requestId,
+      signatureHeaderPresent: Boolean(signature),
+      metaAppSecretConfigured: Boolean(process.env.META_APP_SECRET?.trim()),
+      durationMs: Date.now() - startedAt
+    });
+    return NextResponse.json({ ok: false, code: "INVALID_SIGNATURE", requestId }, {
+      status: 401,
+      headers: { "Cache-Control": "no-store" }
+    });
+  }
+  console.info("[whatsapp-webhook] signature_validation_passed", { requestId, durationMs: Date.now() - startedAt });
 
   let payload: any;
   try {
     payload = JSON.parse(raw);
   } catch {
-    return new NextResponse("Bad JSON", { status: 400 });
+    console.warn("[whatsapp-webhook] payload_json_invalid", { requestId, durationMs: Date.now() - startedAt });
+    return NextResponse.json({ ok: false, code: "BAD_JSON", requestId }, {
+      status: 400,
+      headers: { "Cache-Control": "no-store" }
+    });
   }
 
-  if (payload.object !== "whatsapp_business_account") return NextResponse.json({ ok: true });
+  if (payload.object !== "whatsapp_business_account") {
+    console.info("[whatsapp-webhook] unrelated_object_ignored", { requestId, object: typeof payload.object === "string" ? payload.object : "missing" });
+    return NextResponse.json({ ok: true });
+  }
 
   const incomingMessages = extractTextMessages(payload);
-  console.info("[whatsapp-webhook] signature accepted", {
+  console.info("[whatsapp-webhook] payload_parsed", {
+    requestId,
     object: payload.object,
     entryCount: Array.isArray(payload.entry) ? payload.entry.length : 0,
-    textMessageCount: incomingMessages.length
+    textMessageCount: incomingMessages.length,
+    statusChangeCount: Array.isArray(payload.entry) ? payload.entry.reduce((total: number, entry: any) => total + (Array.isArray(entry?.changes) ? entry.changes.reduce((n: number, change: any) => n + (Array.isArray(change?.value?.statuses) ? change.value.statuses.length : 0), 0) : 0), 0) : 0
   });
   // Status callbacks and non-text events are valid Meta deliveries and require no reply.
-  if (!incomingMessages.length) return NextResponse.json({ ok: true, ignored: true });
+  if (!incomingMessages.length) {
+    console.info("[whatsapp-webhook] valid_event_ignored", { requestId, reason: "no_supported_text_messages", durationMs: Date.now() - startedAt });
+    return NextResponse.json({ ok: true, ignored: true });
+  }
 
   let supabase: ReturnType<typeof db>;
   try {
     supabase = db();
   } catch (error: any) {
-    console.error("[whatsapp-webhook] Supabase client initialization failed", {
-      message: String(error?.message ?? error)
+    console.error("[whatsapp-webhook] supabase_initialization_failed", {
+      requestId,
+      errorName: String(error?.name ?? "SUPABASE_INIT_FAILED").slice(0, 60),
+      errorCode: typeof error?.code === "string" ? error.code.slice(0, 40) : undefined
     });
-    return NextResponse.json({ ok: false, code: "SUPABASE_INIT_FAILED" }, { status: 503 });
+    return NextResponse.json({ ok: false, code: "SUPABASE_INIT_FAILED", requestId }, { status: 503 });
   }
 
   let processed = 0;
@@ -254,7 +307,8 @@ export async function POST(req: NextRequest) {
   let failures = 0;
   for (const incoming of incomingMessages) {
     try {
-      const result = await processIncomingMessage(supabase, payload, incoming);
+      console.info("[whatsapp-webhook] message_extracted", { requestId, messageId: incoming.messageId, textLength: incoming.text.length });
+      const result = await processIncomingMessage(supabase, payload, incoming, requestId);
       if (result.duplicate) duplicates++;
       else processed++;
     } catch {
@@ -262,8 +316,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const durationMs = Date.now() - startedAt;
+  console.info("[whatsapp-webhook] request_completed", { requestId, processed, duplicates, failures, durationMs });
   if (failures) {
-    return NextResponse.json({ ok: false, processed, duplicates, failures }, { status: 500 });
+    return NextResponse.json({ ok: false, code: "MESSAGE_PROCESSING_FAILED", requestId, processed, duplicates, failures }, {
+      status: 500,
+      headers: { "Cache-Control": "no-store" }
+    });
   }
-  return NextResponse.json({ ok: true, processed, duplicates });
+  return NextResponse.json({ ok: true, requestId, processed, duplicates, durationMs }, {
+    headers: { "Cache-Control": "no-store" }
+  });
 }
